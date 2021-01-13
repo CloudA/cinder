@@ -19,8 +19,7 @@ class TrueNASCommon(object):
     VERSION = "2.0.0"
     IGROUP_PREFIX = 'openstack-'
 
-    required_flags = ['ixsystems_transport_type', 'ixsystems_login',
-                      'ixsystems_password', 'ixsystems_server_hostname',
+    required_flags = ['ixsystems_transport_type', 'ixsystems_server_hostname',
                       'ixsystems_server_port', 'ixsystems_server_iscsi_port',
                       'ixsystems_volume_backend_name', 'ixsystems_vendor_name', 'ixsystems_storage_protocol',
                       'ixsystems_datastore_pool', 'ixsystems_dataset_path', 'ixsystems_iqn_prefix', ]
@@ -38,15 +37,19 @@ class TrueNASCommon(object):
         """
         host_system = kwargs['hostname']
         LOG.debug('Using iXsystems FREENAS server: %s', host_system)
+        auth_style = FreeNASServer.STYLE_LOGIN_PASSWORD
+        if kwargs['api_key']:
+            auth_style = FreeNASServer.STYLE_API_KEY
         self.handle = FreeNASServer(host=host_system,
                                  port=kwargs['port'],
                                  username=kwargs['login'],
                                  password=kwargs['password'],
+                                 api_key=kwargs['api_key'],
                                  api_version=kwargs['api_version'],
                                  transport_type=kwargs['transport_type'],
-                                 style=FreeNASServer.STYLE_LOGIN_PASSWORD)
+                                 style=auth_style)
         if not self.handle:
-            raise FreeNASApiError("Failed to create handle for FREENAS server")    
+            raise FreeNASApiError("Failed to create handle for FREENAS server")
 
     def _check_flags(self):
         """Check if any required iXsystems FREENAS configuration flag is missing."""
@@ -54,6 +57,11 @@ class TrueNASCommon(object):
             if not getattr(self.configuration, flag, None):
                 print("missing flag :", flag)
                 raise exception.CinderException(_('%s is not set') % flag)
+        if not getattr(self.configuration, 'ixsystems_api_key'):
+            for flag in ['ixsystems_login', 'ixsystems_password']:
+                if not getattr(self.configuration, flag, None):
+                    print("missing flag :", flag)
+                    raise exception.CinderException(_('%s is not set and ixsystems_api_key is not set') % flag)
 
     def _do_custom_setup(self):
         """Setup iXsystems FREENAS driver."""
@@ -61,6 +69,7 @@ class TrueNASCommon(object):
                             port=self.configuration.ixsystems_server_port,
                             login=self.configuration.ixsystems_login,
                             password=self.configuration.ixsystems_password,
+                            api_key=self.configuration.ixsystems_api_key,
                             api_version=self.configuration.ixsystems_api_version,
                             transport_type=
                             self.configuration.ixsystems_transport_type)
@@ -353,9 +362,7 @@ class TrueNASCommon(object):
         """Retrieve stats info from volume group
             REST API: $ GET /pools/mypool "size":95,"allocated":85,
         """
-        # HACK: for now, use an API v1.0 call to get these stats until available in v2.0 API
-        self.handle.set_api_version('v1.0')
-        request_urn = ('%s/%s/') % ('/storage/volume', self.configuration.ixsystems_datastore_pool)
+        request_urn = ('%s/%s/') % ('/pool/dataset/id', self.configuration.ixsystems_datastore_pool)
         LOG.debug('_update_volume_stats request_urn : %s', request_urn)
         ret = self.handle.invoke_command(FreeNASServer.SELECT_COMMAND,
                                          request_urn, None)
@@ -365,15 +372,17 @@ class TrueNASCommon(object):
         data["vendor_name"] =  self.vendor_name
         data["driver_version"] = self.VERSION
         data["storage_protocol"] = self.storage_protocol
-        data['total_capacity_gb'] = ix_utils.get_size_in_gb(json.loads(ret['response'])['avail'] + json.loads(ret['response'])['used'])
-        data['free_capacity_gb'] = ix_utils.get_size_in_gb(json.loads(ret['response'])['avail'])
+        parsed_ret = json.loads(ret['response'])
+        free_capacity = parsed_ret['available']['parsed']
+        total_capacity = parsed_ret['used']['parsed'] + free_capacity
+        data['total_capacity_gb'] = ix_utils.get_size_in_gb(total_capacity)
+        data['free_capacity_gb'] = ix_utils.get_size_in_gb(free_capacity)
         data['reserved_percentage'] = \
             self.configuration.ixsystems_reserved_percentage
         data['reserved_percentage'] = 0
         data['QoS_support'] = False
 
         self.stats = data
-        self.handle.set_api_version('v2.0') # set back to v2.0 api for other calls...
         return self.stats
 
     def _create_cloned_volume_to_snapshot_map(self, volume_name, snapshot):
