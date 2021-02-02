@@ -25,7 +25,7 @@ class TrueNASCommon(object):
                       'ixsystems_datastore_pool', 'ixsystems_dataset_path', 'ixsystems_iqn_prefix', ]
 
     def __init__(self, configuration=None):
-        self.configuration = configuration        
+        self.configuration = configuration
         self.backend_name = self.configuration.ixsystems_volume_backend_name
         self.vendor_name = self.configuration.ixsystems_vendor_name
         self.storage_protocol = self.configuration.ixsystems_storage_protocol
@@ -124,7 +124,7 @@ class TrueNASCommon(object):
         targetgroup_params[0]['initiator'] = int(self.configuration.ixsystems_initiator_id) #TODO: Decide to create initiator or not
         tgt_params = {}
         tgt_params['name'] = name
-        tgt_params['groups'] = targetgroup_params 
+        tgt_params['groups'] = targetgroup_params
         jtgt_params = json.dumps(tgt_params)
         jtgt_params = jtgt_params.encode('utf8')
         LOG.debug('_create_target params : %s', json.dumps(tgt_params))
@@ -175,7 +175,7 @@ class TrueNASCommon(object):
         if ret['status'] != FreeNASServer.STATUS_OK:
             msg = ('Error while deleting iscsi target: %s' % ret['response'])
             raise FreeNASApiError('Unexpected error', msg)
-        
+
         uresp = ret['response']
         resp = json.loads(uresp.decode('utf8'))
         try:
@@ -193,7 +193,7 @@ class TrueNASCommon(object):
         if ret['status'] != FreeNASServer.STATUS_OK:
             msg = ('Error while deleting iscsi target: %s' % ret['response'])
             raise FreeNASApiError('Unexpected error', msg)
-        
+
         uresp = ret['response']
         resp = json.loads(uresp.decode('utf8'))
         try:
@@ -230,13 +230,13 @@ class TrueNASCommon(object):
 
         #Create extent for iscsi target for specified volume
         ext_id = self._create_extent(name, volume_name)
-     
+
         #Create target to extent mapping for specified volume
         self._target_to_extent(tgt_id, ext_id)
 
     def delete_target_to_extent(self, tgt_ext_id):
         pass
-    
+
     def delete_target(self, target_id):
         if target_id:
             request_urn = ('%s/id/%s') % (FreeNASServer.REST_API_TARGET, target_id)
@@ -265,14 +265,14 @@ class TrueNASCommon(object):
         tgt_ext_id = self.get_tgt_ext_id(name)
         target_id = self.get_iscsitarget_id(name)
         extent_id = self.get_extent_id(name)
-        
+
         self.delete_target_to_extent(tgt_ext_id)
         self.delete_target(target_id)
         self.delete_extent(extent_id)
 
     def _dependent_clone(self, name):
         """ returns the fullname of any snapshot used to create volume 'name' """
-        request_urn = ('%s/id/%s%s') % (FreeNASServer.REST_API_VOLUME, 
+        request_urn = ('%s/id/%s%s') % (FreeNASServer.REST_API_VOLUME,
                       urllib.parse.quote_plus(self.configuration.ixsystems_dataset_path + '/'), name)
         LOG.debug('_dependent_clones urn : %s', request_urn)
         ret = self.handle.invoke_command(FreeNASServer.SELECT_COMMAND, request_urn, None)
@@ -287,9 +287,21 @@ class TrueNASCommon(object):
     def _delete_volume(self, name):
         """Deletes specified volume
         """
-        request_urn = ('%s/id/%s%s') % (FreeNASServer.REST_API_VOLUME, 
+        request_urn = ('%s/id/%s%s') % (FreeNASServer.REST_API_VOLUME,
                       urllib.parse.quote_plus(self.configuration.ixsystems_dataset_path + '/'), name)
         LOG.debug('_delete_volume urn : %s', request_urn)
+
+        # short circuit the delete command if the volume doesn't actually exist on the
+        # backend. error cases in the create process can make cinde think it exists when
+        # it doesnt, and otherwise the volume is un-deleteable.
+        check_ret = self.handle.invoke_command(
+                FreeNASServer.SELECT_COMMAND,
+                request_urn, None)
+
+        if check_ret['status'] == FreeNASServer.STATUS_ERROR \
+                and '404:Not Found' in check_ret['response']:
+            return None
+
         clone = self._dependent_clone(name) # add check for dependent clone, if exists will delete
         ret = self.handle.invoke_command(FreeNASServer.DELETE_COMMAND,
                                          request_urn, None)
@@ -325,7 +337,7 @@ class TrueNASCommon(object):
     def _delete_snapshot(self, name, volume_name):
         """Delets a snapshot of specified volume."""
         LOG.debug('_delete_snapshot, deleting name: %s from volume: %s', name, volume_name)
-        request_urn = ('%s/id/%s@%s') % (FreeNASServer.REST_API_SNAPSHOT, 
+        request_urn = ('%s/id/%s@%s') % (FreeNASServer.REST_API_SNAPSHOT,
                       urllib.parse.quote_plus(self.configuration.ixsystems_dataset_path + '/' + volume_name), name)
         LOG.debug('_delete_snapshot urn : %s', request_urn)
         try:
@@ -403,7 +415,7 @@ class TrueNASCommon(object):
         params['volsize'] = ix_utils.get_bytes_from_gb(new_size)
         jparams = json.dumps(params)
         jparams = jparams.encode('utf8')
-        request_urn = ('%s/id/%s') % (FreeNASServer.REST_API_VOLUME, 
+        request_urn = ('%s/id/%s') % (FreeNASServer.REST_API_VOLUME,
                       urllib.parse.quote_plus(self.configuration.ixsystems_dataset_path + '/' + name))
         ret = self.handle.invoke_command(FreeNASServer.UPDATE_COMMAND,
                                          request_urn, jparams)
